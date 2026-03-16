@@ -1,135 +1,176 @@
-# ☁️ Cloud Security Alerting System (AWS & PostgreSQL)
+# 🔐 Cloud Incident Response + IAM Lockdown
 
-This project simulates a real-world SOC Analyst workflow by correlating cloud security events from AWS EC2 with user data and generating actionable security alerts using PostgreSQL. The goal is to demonstrate cloud event visibility, log ingestion, and query-based investigation in a structured lab environment.
+**Automated threat detection and IAM containment using AWS CloudTrail, CloudWatch, SNS, and CLI-driven policy enforcement.**
 
----
-
-## 📚 Use Cases
-
-✅ Correlate EC2 actions with user roles and severity levels  
-✅ Detect termination or shutdown events from unknown sources  
-✅ Simulate SOC workflows with JOIN queries and attribution  
+> A cloud-native incident response pipeline that detects unauthorized privilege escalation in real time and executes automated IAM lockdown — no manual triage required.
 
 ---
 
-## 🧱 Repository Contents
+## 🧩 Problem
 
-| File              | Description                                                  |
-|-------------------|--------------------------------------------------------------|
-| `schema.sql`      | SQL for creating `cloud_event_logs`, `users`, and `alerts` tables |
-| `seed_data.sql`   | Insert statements for sample cloud events and alerts         |
-| `queries.sql`     | JOIN queries to investigate cloud behavior and alert severity |
-| `screenshots/`    | Visual walkthrough of key setup, data modeling, and output   |
+Privilege escalation is one of the most common and damaging attack patterns in cloud environments. An attacker — or a compromised internal account — who gains the ability to create or modify IAM policies can effectively own an AWS environment within minutes.
+
+The challenge: most cloud teams detect these events *after the damage is done*, through manual log reviews or delayed SIEM alerts. The goal of this project was to build a detection-to-response pipeline that operates automatically, from the moment a suspicious IAM event fires to the moment access is restricted — without human intervention in the containment step.
 
 ---
 
-## 🛠️ Technologies Used
+## 🛠️ Approach
 
-- **AWS EC2** (Cloud events source)  
-- **CloudWatch + EventBridge** (Log automation and rule generation)  
-- **PostgreSQL (AWS RDS)** (Relational database for alert correlation)  
-- **Ubuntu 24.04 VM (Jumpbox)** (Querying interface via psql)  
-- **Terraform** (Infrastructure as Code for provisioning)
-
----
-
-## 🧪 Sample Query Output
-
-```sql
-SELECT u.username, e.event_type, a.severity
-FROM users u
-JOIN cloud_event_logs e ON u.user_id = e.user_id
-JOIN alerts a ON e.event_id = a.event_id
-WHERE a.severity = 'High';
+### Architecture
+```
+CloudTrail → CloudWatch Logs → Metric Filter → CloudWatch Alarm → SNS → IAM Lockdown (CLI)
 ```
 
+| Component | Role |
+|---|---|
+| AWS CloudTrail | Captures all API activity including IAM events |
+| CloudWatch Logs + Metric Filter | Parses logs for `CreatePolicyVersion` and recon patterns |
+| CloudWatch Alarm | Triggers when filtered metric threshold is crossed |
+| Amazon SNS | Delivers email alert and signals containment |
+| IAM Policy (CLI) | Applies deny policy to restrict compromised user |
+| EventBridge | Routes IAM change events to target log group |
+
+### Attack Scenario Simulated
+
+A `suspect-user` account is used to simulate an insider threat or compromised credential. The scenario runs in two phases:
+
+**Phase 1 — Privilege Escalation**
+- Suspect account is granted AdministratorAccess via `attach-user-policy`
+- New access key is generated, simulating credential theft
+- AWS CLI profile is configured using the stolen key
+- Attacker performs recon: queries log groups, enumerates IAM structure
+
+**Phase 2 — Detection and Response**
+- CloudTrail logs the `CreatePolicyVersion` event from the suspect profile
+- Metric filter flags the event; CloudWatch alarm breaches threshold
+- SNS sends email alert to security team
+- IAM deny policy is applied via CLI to lock out the suspect user
+
+### Key Technical Decisions
+
+- **Metric filter over EventBridge alone:** EventBridge provides near-real-time routing but does not natively support threshold-based alarms. CloudWatch metric filters allow alarm logic (e.g., "trigger if this event appears more than once in 5 minutes") which is essential for avoiding false positives on one-off API calls.
+- **CLI-driven lockdown over Lambda automation:** For this lab, IAM lockdown was executed manually via CLI to demonstrate the analyst workflow step-by-step. The architecture is Lambda-ready — the SNS topic can trigger a Lambda function to apply the deny policy automatically, which is the production extension of this pattern.
+- **Scoped deny policy:** The lockdown policy uses an explicit deny on `iam:*` and `sts:AssumeRole` rather than a blanket account-wide deny, to avoid disrupting legitimate CloudWatch agent and EC2 service calls during containment.
+
 ---
 
-## 🖼️ Project Walkthrough 
+## ✅ Outcome
 
-> These screenshots provide a step-by-step visual of the project process.
+| Milestone | Result |
+|---|---|
+| CloudTrail initialized and logging | ✅ Confirmed |
+| Root login alarm configured and triggered | ✅ Email alert received |
+| Suspect user privilege escalation simulated | ✅ AdministratorAccess attached, access key created |
+| Recon activity detected via metric filter | ✅ SNS alarm fired |
+| `CreatePolicyVersion` escalation detected | ✅ Alarm threshold crossed |
+| IAM lockdown policy applied | ✅ Access restricted via CLI |
 
-![cloud-logs-and-user-table](screenshots/cloud-logs-and-user-table.png)  
-📌 Preview of `cloud_event_logs` and `users` tables used for alert correlation.
+The full detection-to-alert pipeline operated end-to-end. A `CreatePolicyVersion` event by the suspect profile triggered the CloudWatch alarm within the metric evaluation window and delivered an SNS email notification. The IAM deny policy was then applied, restricting the compromised account's access to IAM and role assumption.
 
-![data-inserts](screenshots/data-inserts.png)  
-📌 Sample `INSERT` statements for seeding test events and users.
+---
 
-![full-event-query-output](screenshots/full-event-query-output.png)  
-📌 Combined event query showing user, action, and alert severity.
+## 📸 Walkthrough
 
-![high-severity-termination](screenshots/high-severity-termination.png)  
-📌 Example of a high-severity EC2 termination alert.
+### Infrastructure Setup
+![CloudTrail Created](screenshots/01-cloudtrail-creation.png)
+*CloudTrail initialized for API activity logging*
 
-![joined-data-view](screenshots/joined-data-view.png)  
-📌 JOIN of all three tables with correlated cloud event and user data.
+![CloudTrail Logging Enabled](screenshots/03-enable-logging.png)
+*Logging enabled across all regions for full governance coverage*
 
-![red-team-user](screenshots/red-team-user.png)  
-📌 User attributes for a Red Team engineer responsible for the event.
+![EventBridge Rule Created](screenshots/04-eventbridge-rule-created.png)
+*EventBridge rule routes IAM change events to CloudWatch log group*
 
-![initial-ec2-instance-view](screenshots/initial-ec2-instance-view.png)  
-📌 AWS EC2 instance deployed for PostgreSQL monitoring.
+### Detection Pipeline
+![CloudWatch Metric Filter](screenshots/08-cloudwatch-metric-check.png)
+*Metric filter targeting `CreatePolicyVersion` events in CloudTrail log group*
 
-![security-group-review](screenshots/security-group-review.png)  
-📌 Review of security group settings for network access.
+![Log Group Filter Fix](screenshots/11-cloudwatch-metric-filter-loggroup-fix.png)
+*Corrected filter destination — initial misconfiguration pointed to wrong log group; fixed by verifying log group ARN*
 
-![rds-instance-details](screenshots/rds-instance-details.png)  
-📌 PostgreSQL RDS instance configuration details.
+![Root Login Alarm](screenshots/15-cloudwatch-root-login-alarm-configured.png)
+*CloudWatch alarm monitoring root account logins — triggers on any root API activity*
 
-![postgres-endpoint-connect](screenshots/postgres-endpoint-connect.png)  
-📌 Endpoint string used to connect via psql.
+![Email Alert Received](screenshots/16-root-login-alarm-email.png)
+*SNS email notification delivered on alarm breach*
 
-![successful-psql-connection](screenshots/successful-psql-connection.png)  
-📌 Terminal confirmation of successful PostgreSQL login.
+![CloudTrail Root Event](screenshots/18-cloudtrail-root-events.png)
+*Root login event captured and visible in CloudTrail event history*
 
-![created-custom-tables](screenshots/created-custom-tables.png)  
-📌 Confirmed creation of custom `cloud_event_logs`, `users`, and `alerts` tables.
+### Attack Simulation
+![Suspect User Exists](screenshots/19-iam-user-already-exists-suspect-user.png)
+*Suspect IAM user confirmed in account*
 
-![cloudwatch-event-policy](screenshots/cloudwatch-event-policy.png)  
-📌 Policy used to enable CloudWatch event delivery.
+![Admin Policy Attached](screenshots/22-iam-attach-admin-policy-to-suspect-user.png)
+*AdministratorAccess policy attached — privilege escalation executed*
 
-![cloudwatch-trigger-test](screenshots/cloudwatch-trigger-test.png)  
-📌 Manual test trigger for CloudWatch rule validation.
+![Access Key Created](screenshots/24-access-key-created-suspect-user-aws-compromise.png)
+*New access key generated for suspect user — credential exfiltration simulated*
 
-![cloudwatch-logs-creation](screenshots/cloudwatch-logs-creation.png)  
-📌 Log group creation to store EC2 event activity.
+![Profile Configured](screenshots/suspect-configure-profile.PNG)
+*AWS CLI profile configured with stolen credentials*
 
-![eventbridge-rule-preview](screenshots/eventbridge-rule-preview.png)  
-📌 AWS EventBridge rule setup preview.
+![Recon Activity](screenshots/28-identity-log-groups-output.png)
+*Attacker enumerates log groups via CLI — recon behavior logged*
 
-![ec2-shutdown-log](screenshots/ec2-shutdown-log.png)  
-📌 Example log for EC2 shutdown detection.
+### Response
+![Recon Filter Applied](screenshots/29-put-metric-filter-recon.png)
+*Metric filter added to detect log group enumeration pattern*
 
-![high-severity-alert-generated](screenshots/high-severity-alert-generated.png)  
-📌 Alert generated and stored in `alerts` table.
+![Alarm Confirmed](screenshots/31-cloudwatch-alarm-confirmation..png)
+*CloudWatch alarm created for recon detection threshold*
 
-![jumpbox-psql-query-output](screenshots/jumpbox-psql-query-output.png)  
-📌 Terminal output from Ubuntu 24.04 Jumpbox querying PostgreSQL.
+![SNS Alarm Triggered](screenshots/33-sns-recon-alarm.png)
+*Alert delivered when recon threshold breached*
 
-![second-event-log](screenshots/second-event-log.png)  
-📌 Additional log showing second EC2 termination event.
+![Escalation Filter](screenshots/34-filter-escalation.png)
+*Second metric filter added for `CreatePolicyVersion` escalation detection*
 
-![terraform-rds-provision-success](screenshots/terraform-rds-provision-success.png)  
-📌 Terraform deployment output confirming successful RDS provisioning.
+![Lockdown Policy JSON](screenshots/36-policy-json..png)
+*Custom deny policy drafted targeting IAM and STS actions*
 
-![terraform-output-values](screenshots/terraform-output-values.png)  
-📌 Terraform output values used for connection string and monitoring setup.
+![Policy Created](screenshots/38-create-policy-v1.png)
+*Lockdown policy successfully deployed to account*
 
-![additional-user-insert](screenshots/additional-user-insert.png)  
-📌 Inserted new user into `users` table for correlation testing.
+![Escalation Alarm Triggered](screenshots/39-create-policy-v2-alarm-trigger.png)
+*Alarm fires on `CreatePolicyVersion` event from suspect profile*
 
-![cloudwatch-dashboard-view](screenshots/cloudwatch-dashboard-view.png)  
-📌 CloudWatch dashboard monitoring EC2 state transitions.
+![Threshold Crossed](screenshots/40-alarm-threshold-crossed.PNG)
+*CloudWatch confirms alarm breach — incident severity confirmed*
 
-![system-query-with-user-attribution](screenshots/system-query-with-user-attribution.png)  
-📌 Query results showing user attribution for a system-level event.
+---
 
-![final-query-validation](screenshots/final-query-validation.png)  
-📌 Final JOIN validation confirming alert, event, and user linkage.
+## 📚 Lessons Learned
 
+**Log group targeting matters more than the filter itself.** The metric filter was correctly written but initially pointed at the wrong log group — CloudTrail was logging to one group while the filter was watching another. The alarm never fired until I verified the ARN explicitly. In production, this would be a silent failure — detection configured but not operational. Lesson: always validate end-to-end with a test event before declaring a detection rule live.
 
-### 📌 Key Learning Outcomes
-- Practiced correlating cloud security logs with user identity and severity levels
-- Built SQL queries to support SOC investigations
-- Used Terraform to automate provisioning of secure AWS infrastructure
-- Gained hands-on experience querying PostgreSQL (AWS RDS) from a remote VM
+**Threshold tuning is a real tradeoff.** Setting the alarm threshold to 1 (any single occurrence triggers) is appropriate for high-confidence events like `CreatePolicyVersion` by a non-admin account. For noisier events like log group enumeration, a threshold of 1 would produce false positives in a real environment. Distinguishing signal from noise is the core skill in detection engineering.
+
+**CLI lockdown is fast but Lambda is the production pattern.** Manually applying the deny policy via CLI works in a lab and demonstrates the analyst workflow clearly. In production, the SNS topic should trigger a Lambda function that applies the lockdown automatically within seconds of the alarm — removing human latency from the containment step entirely.
+
+---
+
+## 🔧 Tools & Services
+
+- AWS CloudTrail
+- AWS CloudWatch Logs & Alarms
+- Amazon SNS
+- Amazon EventBridge
+- AWS IAM
+- AWS CLI
+- Ubuntu 24.04 (VirtualBox)
+
+---
+
+## 🚀 Planned Extensions
+
+- **Lambda automation:** Replace manual CLI lockdown with SNS-triggered Lambda for sub-60-second automated containment
+- **Terraform provisioning:** Infrastructure-as-code for repeatable deployment of the full detection pipeline
+- **Additional detection rules:** Expand metric filters to cover `AttachUserPolicy`, `CreateUser`, and `AssumeRole` abuse patterns
+- **Integration with Cloud Security Alerting System:** Feed IAM events into the PostgreSQL alerting pipeline for cross-system correlation
+
+---
+
+## ⚠️ Legal Disclaimer
+
+This project was conducted entirely within a personal AWS account using simulated test identities. No unauthorized access, credential use, or interaction with external systems occurred. All content is for educational and professional development purposes only.
